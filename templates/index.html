@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Donate</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://js.stripe.com/v3/"></script>
+  </head>
+  <body>
+    <main class="page">
+      <section class="card">
+        <div class="card__header">
+          <h1>Support our work</h1>
+          <p>Secure, fast donation checkout.</p>
+        </div>
+
+        <form id="donation-form">
+          <label class="field">
+            <span>Email</span>
+            <input
+              id="email"
+              type="email"
+              placeholder="you@example.com"
+              autocomplete="email"
+              required
+            />
+          </label>
+
+          <label class="field">
+            <span>Amount (USD)</span>
+            <input
+              id="amount"
+              type="number"
+              step="0.01"
+              min="1"
+              placeholder="25.00"
+              required
+            />
+          </label>
+
+          <label class="field">
+            <span>Card</span>
+            <div id="card-element" class="card-element"></div>
+          </label>
+
+          <button id="submit-button" type="submit">Donate</button>
+          <p id="status-message" class="status-message" role="status"></p>
+        </form>
+      </section>
+    </main>
+
+    <script>
+      const stripe = Stripe("{{ publishable_key }}");
+      const elements = stripe.elements();
+      const cardElement = elements.create("card", {
+        style: {
+          base: {
+            color: "#f4f6fb",
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: "16px",
+            "::placeholder": { color: "#7a8296" },
+          },
+          invalid: { color: "#ff6b6b" },
+        },
+      });
+      cardElement.mount("#card-element");
+
+      const form = document.getElementById("donation-form");
+      const statusMessage = document.getElementById("status-message");
+      const submitButton = document.getElementById("submit-button");
+
+      const setStatus = (message, isError = false) => {
+        statusMessage.textContent = message;
+        statusMessage.classList.toggle("status-message--error", isError);
+      };
+
+      const callJson = async (url, payload) => {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "Payment failed.");
+        }
+        return data;
+      };
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        setStatus("");
+        submitButton.disabled = true;
+
+        const email = document.getElementById("email").value.trim();
+        const amount = document.getElementById("amount").value.trim();
+
+        try {
+          const { paymentMethod, error } = await stripe.createPaymentMethod({
+            type: "card",
+            card: cardElement,
+            billing_details: { email },
+          });
+
+          if (error) {
+            throw new Error(error.message);
+          }
+
+          let result = await callJson("/create-payment-intent", {
+            amount,
+            email,
+            payment_method_id: paymentMethod.id,
+          });
+
+          if (result.status === "requires_action") {
+            const { error: actionError, paymentIntent } =
+              await stripe.handleCardAction(result.client_secret);
+
+            if (actionError) {
+              throw new Error(actionError.message);
+            }
+
+            result = await callJson("/confirm-payment-intent", {
+              payment_intent_id: paymentIntent.id,
+            });
+          }
+
+          if (result.status === "succeeded") {
+            setStatus("Thank you! Your donation was received.");
+            form.reset();
+            cardElement.clear();
+          } else {
+            setStatus("Payment processing. Please check your email.");
+          }
+        } catch (err) {
+          setStatus(err.message, true);
+        } finally {
+          submitButton.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
